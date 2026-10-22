@@ -1162,6 +1162,47 @@ def _select_two_step_split_k(M, N, K):
     return None
 
 
+_SMALL_M_NT_CONFIGS = {
+    # MiniCPM5-2B Decode shapes on MetaX C500 sGPU.
+    (2048, 2560): (64, 16, 64, 4, 2),
+    (2048, 12288): (64, 64, 128, 4, 2),
+    (6144, 2048): (64, 64, 128, 4, 4),
+    (2048, 2048): (32, 64, 128, 4, 4),
+}
+
+
+def _small_m_nt_config(M, N, K):
+    if not (32 <= M <= 64):
+        return None
+    return _SMALL_M_NT_CONFIGS.get((K, N))
+
+
+def _small_m_nt_mm(a, b, c, M, N, K, config):
+    block_m, block_n, block_k, num_warps, num_stages = config
+    grid = lambda META: (
+        triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
+    )
+    with torch_device_fn.device(a.device):
+        mm_kernel_nt.jit_function[grid](
+            a,
+            b,
+            c,
+            M,
+            N,
+            K,
+            GROUP_M=8,
+            BLOCK_M=block_m,
+            BLOCK_N=block_n,
+            BLOCK_K=block_k,
+            EVEN_M=M % block_m == 0,
+            EVEN_N=N % block_n == 0,
+            EVEN_K=K % block_k == 0,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
+    return c
+
+
 def mm(a, b):
     logger.debug("GEMS_METAX MM")
     device = a.device
@@ -1181,6 +1222,9 @@ def mm(a, b):
         if _gemv_k_parallel_scenario(M, K):
             return gemv_mm_k_parallel(a, b, c, M, K)
         return gemv_mm(a, b, c, M, K)
+    small_m_config = _small_m_nt_config(M, N, K)
+    if small_m_config is not None:
+        return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
     two_step_split_k = _select_two_step_split_k(M, N, K)
     if two_step_split_k is not None:
         return splitk_mm_two_step(a, b, c, M, N, K, two_step_split_k)
@@ -1211,6 +1255,9 @@ def mm_out(a, b, *, out):
         if _gemv_k_parallel_scenario(M, K):
             return gemv_mm_k_parallel(a, b, c, M, K)
         return gemv_mm(a, b, c, M, K)
+    small_m_config = _small_m_nt_config(M, N, K)
+    if small_m_config is not None:
+        return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
     two_step_split_k = _select_two_step_split_k(M, N, K)
     if two_step_split_k is not None:
         return splitk_mm_two_step(a, b, out, M, N, K, two_step_split_k)
