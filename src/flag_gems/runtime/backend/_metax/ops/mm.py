@@ -407,6 +407,48 @@ def mm_kernel_nt(
         tl.store(c_ptrs, result, mask=(rm < M)[:, None] & (rn < N)[None, :])
 
 
+@triton.jit
+def mm_kernel_nt_small_m(
+    A,
+    B,
+    C,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """Small-M NT GEMM with contiguous K loads for both operands.
+
+    B is the underlying row-major [N, K] weight. Loading it as [BLOCK_N,
+    BLOCK_K] avoids the strided [BLOCK_K, BLOCK_N] global-memory pattern used
+    by the generic NT kernel; tl.trans performs the layout conversion expected
+    by the matrix-multiply instruction.
+    """
+    pid_n = tl.program_id(0)
+    rm = tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+
+    a_ptrs = A + rm[:, None] * K + rk[None, :]
+    b_ptrs = B + rn[:, None] * K + rk[None, :]
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for _ in range(0, tl.cdiv(K, BLOCK_K)):
+        a = tl.load(a_ptrs, mask=rm[:, None] < M, other=0.0)
+        b = tl.load(b_ptrs)
+        acc = tl.dot(a, tl.trans(b), acc, out_dtype=tl.float32)
+        a_ptrs += BLOCK_K
+        b_ptrs += BLOCK_K
+
+    c_ptrs = C + rm[:, None] * N + rn[None, :]
+    tl.store(
+        c_ptrs,
+        acc.to(C.dtype.element_ty),
+        mask=(rm < M)[:, None] & (rn < N)[None, :],
+    )
+
+
 def _prune_gemv_configs(configs, named_args, **kwargs):
     configs = list(configs)
     pruned_configs = [
@@ -1163,40 +1205,54 @@ def _select_two_step_split_k(M, N, K):
 
 
 _SMALL_M_NT_CONFIGS = {
+    # (K, N): ((inclusive M upper bound, (BM, BN, BK, warps, stages)), ...)
     # MiniCPM5-2B Decode shapes on MetaX C500 sGPU.
-    (2048, 2560): (64, 32, 64, 4, 4),
-    (2048, 12288): (64, 64, 64, 4, 2),
-    (6144, 2048): (32, 64, 64, 4, 4),
-    (2048, 2048): (32, 64, 64, 4, 4),
+    (2048, 2560): (
+        (32, (32, 32, 64, 4, 4)),
+        (64, (64, 32, 128, 8, 2)),
+    ),
+    (2048, 12288): (
+        (32, (64, 64, 64, 4, 4)),
+        (64, (64, 128, 64, 4, 3)),
+    ),
+    (6144, 2048): (
+        (32, (32, 32, 128, 4, 2)),
+        (64, (64, 32, 128, 4, 2)),
+    ),
+    (2048, 2048): (
+        (32, (32, 32, 64, 4, 4)),
+        (64, (64, 32, 128, 4, 2)),
+    ),
 }
 
 
 def _small_m_nt_config(M, N, K):
-    if not (32 <= M <= 64):
+    if not (1 <= M <= 64):
         return None
-    return _SMALL_M_NT_CONFIGS.get((K, N))
+    configs = _SMALL_M_NT_CONFIGS.get((K, N))
+    if configs is None:
+        return None
+    for upper_bound, config in configs:
+        if M <= upper_bound:
+            return config
+    return None
 
 
 def _small_m_nt_mm(a, b, c, M, N, K, config):
     block_m, block_n, block_k, num_warps, num_stages = config
-    grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
-    )
+    assert block_m >= M
+    grid = (triton.cdiv(N, block_n),)
     with torch_device_fn.device(a.device):
-        mm_kernel_nt.jit_function[grid](
+        mm_kernel_nt_small_m[grid](
             a,
             b,
             c,
             M,
             N,
             K,
-            GROUP_M=8,
             BLOCK_M=block_m,
             BLOCK_N=block_n,
             BLOCK_K=block_k,
-            EVEN_M=M % block_m == 0,
-            EVEN_N=N % block_n == 0,
-            EVEN_K=K % block_k == 0,
             num_warps=num_warps,
             num_stages=num_stages,
         )
