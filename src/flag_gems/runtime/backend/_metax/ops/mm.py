@@ -449,6 +449,61 @@ def mm_kernel_nt_small_m(
     )
 
 
+@triton.jit
+def mm_kernel_nt_prefill(
+    A,
+    B,
+    C,
+    M,
+    N,
+    K,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+):
+    """Large-M NT GEMM with contiguous K loads for the transposed weight."""
+    pid = tl.program_id(0)
+    grid_m = tl.cdiv(M, BLOCK_M)
+    grid_n = tl.cdiv(N, BLOCK_N)
+    programs_per_group = GROUP_M * grid_n
+    group_id = pid // programs_per_group
+    first_pid_m = group_id * GROUP_M
+    group_size_m = min(grid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + (pid % programs_per_group) % group_size_m
+    pid_n = (pid % programs_per_group) // group_size_m
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    a_ptrs = A + rm[:, None] * K + rk[None, :]
+    # B is the underlying contiguous [N, K] weight. Load [BLOCK_N, BLOCK_K]
+    # so the innermost K dimension remains coalesced, then transpose in
+    # registers for tl.dot.
+    b_ptrs = B + rn[:, None] * K + rk[None, :]
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for _ in range(0, tl.cdiv(K, BLOCK_K)):
+        a = tl.load(a_ptrs, mask=rm[:, None] < M, other=0.0)
+        b = tl.load(b_ptrs)
+        acc = tl.dot(
+            a,
+            tl.trans(b),
+            acc,
+            out_dtype=tl.float32,
+            allow_tf32=False,
+        )
+        a_ptrs += BLOCK_K
+        b_ptrs += BLOCK_K
+
+    c_ptrs = C + rm[:, None] * N + rn[None, :]
+    tl.store(
+        c_ptrs,
+        acc.to(C.dtype.element_ty),
+        mask=rm[:, None] < M,
+    )
+
+
 def _prune_gemv_configs(configs, named_args, **kwargs):
     configs = list(configs)
     pruned_configs = [
@@ -1259,6 +1314,55 @@ def _small_m_nt_mm(a, b, c, M, N, K, config):
     return c
 
 
+_PREFILL_NT_CONFIGS = {
+    # (K, N): (BLOCK_M, BLOCK_N, BLOCK_K, warps, stages, GROUP_M)
+    # MiniCPM5-2B 4K chunked-prefill shapes on MetaX C500.
+    (2048, 2560): (128, 256, 32, 8, 2, 16),
+    (2048, 12288): (128, 128, 64, 8, 2, 16),
+    (6144, 2048): (128, 128, 64, 8, 2, 16),
+    (2048, 2048): (128, 64, 64, 8, 2, 16),
+}
+
+def _prefill_nt_config(M, N, K):
+    if not (1024 <= M <= 2048):
+        return None
+    return _PREFILL_NT_CONFIGS.get((K, N))
+
+
+def _prefill_nt_layout_supported(a, b, c, K, N):
+    return (
+        a.dtype == torch.bfloat16
+        and b.dtype == torch.bfloat16
+        and c.dtype == torch.bfloat16
+        and a.stride() == (K, 1)
+        and b.stride() == (1, K)
+        and c.stride() == (N, 1)
+    )
+
+
+def _prefill_nt_mm(a, b, c, M, N, K, config):
+    block_m, block_n, block_k, num_warps, num_stages, group_m = config
+    assert N % block_n == 0
+    assert K % block_k == 0
+    grid = (triton.cdiv(M, block_m) * triton.cdiv(N, block_n),)
+    with torch_device_fn.device(a.device):
+        mm_kernel_nt_prefill[grid](
+            a,
+            b,
+            c,
+            M,
+            N,
+            K,
+            BLOCK_M=block_m,
+            BLOCK_N=block_n,
+            BLOCK_K=block_k,
+            GROUP_M=group_m,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
+    return c
+
+
 def mm(a, b):
     logger.debug("GEMS_METAX MM")
     device = a.device
@@ -1281,6 +1385,11 @@ def mm(a, b):
     small_m_config = _small_m_nt_config(M, N, K)
     if small_m_config is not None:
         return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
+    prefill_config = _prefill_nt_config(M, N, K)
+    if prefill_config is not None and _prefill_nt_layout_supported(
+        a, b, c, K, N
+    ):
+        return _prefill_nt_mm(a, b, c, M, N, K, prefill_config)
     two_step_split_k = _select_two_step_split_k(M, N, K)
     if two_step_split_k is not None:
         return splitk_mm_two_step(a, b, c, M, N, K, two_step_split_k)
@@ -1314,6 +1423,11 @@ def mm_out(a, b, *, out):
     small_m_config = _small_m_nt_config(M, N, K)
     if small_m_config is not None:
         return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
+    prefill_config = _prefill_nt_config(M, N, K)
+    if prefill_config is not None and _prefill_nt_layout_supported(
+        a, b, c, K, N
+    ):
+        return _prefill_nt_mm(a, b, c, M, N, K, prefill_config)
     two_step_split_k = _select_two_step_split_k(M, N, K)
     if two_step_split_k is not None:
         return splitk_mm_two_step(a, b, out, M, N, K, two_step_split_k)
