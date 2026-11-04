@@ -450,6 +450,42 @@ def mm_kernel_nt_small_m(
 
 
 @triton.jit
+def mm_kernel_nt_small_m_partial(
+    A,
+    B,
+    P,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+):
+    """Parallel K partitions with contiguous weight loads and FP32 partials."""
+    pid_n = tl.program_id(0)
+    pid_k = tl.program_id(1)
+    rm = tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    iterations = tl.cdiv(K, BLOCK_K)
+    per_split = tl.cdiv(iterations, SPLIT_K)
+    begin = pid_k * per_split
+    end = min(begin + per_split, iterations)
+    a_ptrs = A + rm[:, None] * K + begin * BLOCK_K + rk[None, :]
+    b_ptrs = B + rn[:, None] * K + begin * BLOCK_K + rk[None, :]
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for _ in range(begin, end):
+        a = tl.load(a_ptrs, mask=rm[:, None] < M, other=0.0)
+        b = tl.load(b_ptrs)
+        acc = tl.dot(a, tl.trans(b), acc, out_dtype=tl.float32)
+        a_ptrs += BLOCK_K
+        b_ptrs += BLOCK_K
+    offsets = pid_k * M * N + rm[:, None] * N + rn[None, :]
+    tl.store(P + offsets, acc, mask=rm[:, None] < M)
+
+
+@triton.jit
 def mm_kernel_nt_prefill(
     A,
     B,
@@ -1294,6 +1330,39 @@ def _small_m_nt_config(M, N, K):
 
 
 def _small_m_nt_mm(a, b, c, M, N, K, config):
+    # The long reduction in the down projection benefits from four independent
+    # K partitions. Reduce FP32 partials once, without BF16 atomics or an output
+    # clear. Other projections and smaller batches retain the single kernel.
+    if 33 <= M <= 64 and (K, N) == (6144, 2048):
+        split_k = 4
+        partials = torch.empty((split_k, M, N), device=a.device, dtype=torch.float32)
+        with torch_device_fn.device(a.device):
+            mm_kernel_nt_small_m_partial[(triton.cdiv(N, 64), split_k)](
+                a,
+                b,
+                partials,
+                M,
+                N,
+                K,
+                BLOCK_M=64,
+                BLOCK_N=64,
+                BLOCK_K=64,
+                SPLIT_K=split_k,
+                num_warps=4,
+                num_stages=2,
+            )
+            mm_kernel_splitk_reduce[(triton.cdiv(M * N, 1024),)](
+                partials,
+                c,
+                M,
+                N,
+                N,
+                1,
+                SPLIT_K=split_k,
+                BLOCK_SIZE=1024,
+                num_warps=4,
+            )
+        return c
     block_m, block_n, block_k, num_warps, num_stages = config
     assert block_m >= M
     grid = (triton.cdiv(N, block_n),)
@@ -1324,12 +1393,28 @@ _PREFILL_NT_CONFIGS = {
 }
 
 def _prefill_nt_config(M, N, K):
+    # Chunked-prefill tails and intermediate CUDA graph sizes need different
+    # tiles from both single-token decode and the 1024..2048-token main chunk.
+    if 128 <= M < 1024:
+        shape = (K, N)
+        if shape == (2048, 12288):
+            return (128, 128, 64, 8, 2, 16)
+        if 256 <= M < 512 and shape in ((6144, 2048), (2048, 2048)):
+            return (64, 128, 64, 8, 2, 4)
+        if 192 <= M < 512 and shape == (2048, 2560):
+            return (64, 128, 64, 8, 2, 4)
+        if 512 <= M and (
+            shape in ((6144, 2048), (2048, 2048))
+            or (M < 768 and shape == (2048, 2560))
+        ):
+            return (128, 128, 64, 8, 2, 16)
+        return None
     if not (1024 <= M <= 2048):
         return None
     return _PREFILL_NT_CONFIGS.get((K, N))
 
 
-def _prefill_nt_layout_supported(a, b, c, K, N):
+def _bf16_nt_layout_supported(a, b, c, K, N):
     return (
         a.dtype == torch.bfloat16
         and b.dtype == torch.bfloat16
@@ -1383,10 +1468,10 @@ def mm(a, b):
             return gemv_mm_k_parallel(a, b, c, M, K)
         return gemv_mm(a, b, c, M, K)
     small_m_config = _small_m_nt_config(M, N, K)
-    if small_m_config is not None:
+    if small_m_config is not None and _bf16_nt_layout_supported(a, b, c, K, N):
         return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
     prefill_config = _prefill_nt_config(M, N, K)
-    if prefill_config is not None and _prefill_nt_layout_supported(
+    if prefill_config is not None and _bf16_nt_layout_supported(
         a, b, c, K, N
     ):
         return _prefill_nt_mm(a, b, c, M, N, K, prefill_config)
@@ -1421,10 +1506,10 @@ def mm_out(a, b, *, out):
             return gemv_mm_k_parallel(a, b, c, M, K)
         return gemv_mm(a, b, c, M, K)
     small_m_config = _small_m_nt_config(M, N, K)
-    if small_m_config is not None:
+    if small_m_config is not None and _bf16_nt_layout_supported(a, b, c, K, N):
         return _small_m_nt_mm(a, b, c, M, N, K, small_m_config)
     prefill_config = _prefill_nt_config(M, N, K)
-    if prefill_config is not None and _prefill_nt_layout_supported(
+    if prefill_config is not None and _bf16_nt_layout_supported(
         a, b, c, K, N
     ):
         return _prefill_nt_mm(a, b, c, M, N, K, prefill_config)
