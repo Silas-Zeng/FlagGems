@@ -32,7 +32,7 @@ def test_install_compatible_llama_layer(monkeypatch):
 
 
 @pytest.mark.parametrize("m,actual", [(1,1),(64,61),(64,64),(1985,1981)])
-@pytest.mark.parametrize("hnd", [False,True])
+@pytest.mark.parametrize("hnd", [False,True,"page_head_kv"])
 def test_rope_and_cache_equal_and_graph(m,actual,hnd):
     torch.manual_seed(20261103)
     x=torch.randn(m,2560,device='cuda',dtype=torch.bfloat16)
@@ -41,6 +41,9 @@ def test_rope_and_cache_equal_and_graph(m,actual,hnd):
     cache=torch.randn(4096,128,device='cuda',dtype=q.dtype)
     blocks,bs=(actual+15)//16+3,16
     def allocate():
+        if hnd == "page_head_kv":
+            raw=torch.randn(blocks,2,2,bs,128,device='cuda',dtype=q.dtype)
+            return raw[:,:,0].permute(0,2,1,3)
         raw=torch.randn(blocks,2,bs,128,device='cuda',dtype=q.dtype) if hnd else torch.randn(blocks,bs,2,128,device='cuda',dtype=q.dtype)
         return raw.permute(0,2,1,3) if hnd else raw
     kc,vc=allocate(),allocate()

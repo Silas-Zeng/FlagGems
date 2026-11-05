@@ -3,6 +3,8 @@
 
 """BF16 MLP kernels with contiguous weight tiles and a rounded SwiGLU epilogue."""
 
+import os
+
 import torch
 import triton
 import triton.language as tl
@@ -13,6 +15,7 @@ from .mm import mm_kernel_splitk_reduce, mm_out
 
 PACK_N = 128
 PACK_K = 64
+_PREFILL_SMEM_OPT = os.environ.get("FLAGGEMS_METAX_PREFILL_SMEM_OPT", "1") == "1"
 
 
 @triton.jit
@@ -121,6 +124,7 @@ def packed_gate_up_silu(a, weight, packed, *, large_prefill=False):
             _gate_up_kernel[(triton.cdiv(m, 256) * 48,)](
                 a, packed, output, m, BM=256, BN=128, BK=32, PREFILL=True,
                 num_warps=8, num_stages=2,
+                scenario="smemIndexOpt" if _PREFILL_SMEM_OPT else "",
             )
     elif 128 <= m <= 2048 and a.is_contiguous():
         with torch_device_fn.device(a.device):
@@ -214,6 +218,7 @@ def packed_down(a, weight, packed, *, large_prefill=False, small_split=4):
             _down_prefill_three_kernel[(triton.cdiv(m, 256) * 11,)](
                 a, packed, output, m, 2048, 6144, 256, 64, 32, True,
                 num_warps=8, num_stages=2,
+                scenario="smemOffsetCache" if _PREFILL_SMEM_OPT else "",
             )
     else:
         mm_out(a, weight.t(), out=output)

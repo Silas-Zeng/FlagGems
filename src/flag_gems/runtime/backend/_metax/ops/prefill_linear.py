@@ -1,9 +1,13 @@
 # Copyright 2026 FlagOS Contributors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import triton
 import triton.language as tl
+
+_PREFILL_SMEM_OPT = os.environ.get("FLAGGEMS_METAX_PREFILL_SMEM_OPT", "1") == "1"
 
 
 @triton.jit(do_not_specialize=["M"])
@@ -124,6 +128,7 @@ def projection_linear_packed(a, weight, packed, *, odd_split=False):
             _projection_packed_kernel[(triton.cdiv(m, bm), triton.cdiv(n, bn))](
                 a, packed, output, m, n, k, 128, 64, bm, bn, bk,
                 num_warps=8, num_stages=2,
+                scenario="smemIndexOpt" if _PREFILL_SMEM_OPT and m >= 1024 else "",
             )
     elif m:
         mm_out(a, weight.t(), out=output)
