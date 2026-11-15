@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/MetaX-MACA/TileOPs-Metax",
+  "reference": "refs/pull/9/head",
+  "commit": "5ae6e6bafc50aeec8ac48a3a0bbf978165aa42d4",
+  "purpose": "C500 BF16 kernel adaptation with source-level layout and epilogue optimizations; no framework merge",
+  "adaptation": "BF16 inputs and outputs, existing N128/K64 packed weight layout, optional rounded SwiGLU fusion, shared-memory transpose for coalesced stores in gate/up, output projection and down projection",
+  "local_tail_optimization": "On C500 with104 logical SMs, Down GEMM M1921..2048,N2048,K6144 splits only the final48 tiles in K. Partial accumulators remain FP32; BF16 rounding follows FP32 summation. Shared-memory transpose coalesces partial writes. Full tiles retain the original BF16 epilogue."
+}
