@@ -120,8 +120,17 @@ def _sm_count(device_index):
     return torch.cuda.get_device_properties(device_index).multi_processor_count
 
 
+@functools.lru_cache(maxsize=None)
+def _down_tail_default(device_index):
+    # On the 64-GiB C500, the mixed full/partial kernel is slower than the
+    # regular Down GEMM. Keep the earlier default for smaller memory slices;
+    # FLAGGEMS_METAX_BSM_TAIL still allows explicit ablation on either device.
+    memory = torch.cuda.get_device_properties(device_index).total_memory
+    return "0" if memory >= 60 * 1024**3 else "1"
+
+
 def _try_tail_linear(a, packed, output):
-    if (os.environ.get("FLAGGEMS_METAX_BSM_TAIL", "1") != "1"
+    if (os.environ.get("FLAGGEMS_METAX_BSM_TAIL", _down_tail_default(a.device.index)) != "1"
             or a.shape[1] != 6144 or output.shape[1] != 2048
             or not 1921 <= a.shape[0] <= 2048 or _sm_count(a.device.index) != 104):
         return False

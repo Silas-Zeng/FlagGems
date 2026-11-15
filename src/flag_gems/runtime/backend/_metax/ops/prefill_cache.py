@@ -53,7 +53,7 @@ def gather_bf16_prefill_cache(key, value, block_table, cu_seqlens_k, max_seqlen_
             or block_table is None or block_table.ndim != 2
             or block_table.shape[0] != 1 or block_table.stride(1) != 1
             or block_table.dtype != torch.int32 or block_table.device != key.device
-            or not 1024 <= max_seqlen_k <= 4096
+            or not 1024 <= max_seqlen_k <= 16384
             or max_seqlen_k > block_table.shape[1] * 16
             or cu_seqlens_k is None or cu_seqlens_k.shape != (2,)
             or cu_seqlens_k.dtype != torch.int32 or cu_seqlens_k.device != key.device

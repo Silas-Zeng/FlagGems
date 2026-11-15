@@ -276,6 +276,7 @@ flaggems-flagtune-compare = "flag_gems.flagtune.cli.compare:main"
 "flag_gems.runtime.backend._metax.ops" = [
     "bsm_gate_native/*",
     "bf16_attention_native/*",
+    "bf16_prefill_native/*",
     "bf16_attention_native/include/cute/*",
     "bf16_attention_native/include/cute/*/*",
     "bf16_attention_native/include/mctlass/*",

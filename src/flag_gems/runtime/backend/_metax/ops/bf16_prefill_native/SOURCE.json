@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/MetaX-MACA/flashattn",
+  "commit": "8f27984",
+  "source": "csrc/flash_attn/flash_kernel/fwd_kernel/xcore1000/flash_fwd_kernel_hdim128_blockM128.h",
+  "adaptation": "Regular C500 BF16 prefill pipeline with independently bounded KV partitions; FP32 normalized partial output through verified native accumulator coordinates; stable FP32 LSE merge; no quantization."
+}
