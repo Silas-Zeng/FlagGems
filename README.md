@@ -1,33 +1,101 @@
-# FlagGems 团队协作
+[<img width="2182" height="602" alt="github+banner-20260130" src="https://github.com/flagos-ai/FlagGems/blob/master/.github/assets/banner-20260130.png" />](https://flagos.io/)
 
-沐曦 C500 当前迁移分支已在 `_metax/ops` 中实现 Triton packed GEMM、融合算子
-和分页 GQA Decode，移除了此前新增的 `.cu` 扩展及其编译加载器。
-下文团队协作基点与 BI-V150 验证范围为历史记录，不代表当前 C500 分支的代码状态。
+[中文版](./README_cn.md) | English
 
-这是 FlagOS 第二季 MiniCPM5-2B 吞吐优化项目的团队共用算子代码库，供天数 BI-V150 与沐曦－曦云 C500 两个平台协作使用。
+<div align="right">
+  <a href="https://www.linkedin.com/company/flagos-community" target="_blank">
+    <img src="https://github.com/flagos-ai/FlagGems/blob/master/docs/assets/Linkedin.png" alt="LinkIn" width="32" height="32" />
+  </a>
 
-- [上游中文说明](README_cn.md)：FlagGems 的功能、安装和使用方法。
-- [保留的上游 README](README.upstream.md)：固定版本的原始英文首页。
-- [官方上游](https://github.com/flagos-ai/FlagGems)：项目维护和原始文档来源。
-- [团队实验记录](https://github.com/Silas-Zeng/FlagOS-S2-Minicpm-throughput)：分平台的环境、实验、分析和复现记录。
-- [团队 vLLM 插件](https://github.com/Silas-Zeng/FlagOS-S2-vllm-plugin-FL)：当前候选优化的接入代码。
+  <a href="https://www.youtube.com/@FlagOS_Official" target="_blank">
+    <img src="https://github.com/flagos-ai/FlagGems/blob/master/docs/assets/youtube.png" alt="YouTube" width="32" height="32" />
+  </a>
 
-## 当前源码基点
+  <a href="https://x.com/FlagOS_Official" target="_blank">
+    <img src="https://github.com/flagos-ai/FlagGems/blob/master/docs/assets/x.png" alt="X" width="32" height="32" />
+  </a>
 
-源码固定为官方上游 `v5.3.5`，完整 revision 为：
+  <a href="https://www.facebook.com/flagosglobalcommunity/" target="_blank">
+    <img src="https://github.com/flagos-ai/FlagGems/blob/master/docs/assets/Facebook.png" alt="Facebook" width="32" height="32" />
+  </a>
 
-```text
-4df52d9168ac55c1c1061cefb4638c570292d896
+  <a href="https://discord.com/invite/ubqGuFMTNE" target="_blank">
+    <img src="https://github.com/flagos-ai/FlagGems/blob/master/docs/assets/discord.png" alt="Discord" width="32" height="32" />
+  </a>
+</div>
+
+## About
+
+FlagGems is part of [FlagOS](https://flagos.io/), a fully open-source system software stack
+designed to unify the model–system–chip layers and foster an open and collaborative ecosystem.
+It enables a "develop once, run anywhere" workflow across diverse AI accelerators,
+unlocking hardware performance, eliminating fragmentation among AI chipset-specific software stacks,
+and substantially lowering the cost of porting and maintaining AI workloads.
+
+FlagGems is a high-performance, generic operator library implemented in [Triton](https://github.com/openai/triton) language.
+It is built on a collection of backend-neutral kernels that aims to accelerate LLM (Large-Language Models) training
+and inference across diverse hardware platforms.
+
+By registering with the ATen backend of [PyTorch](https://pytorch.org/), FlagGems facilitates a seamless transition,
+allowing model developers to switch to Triton without changing the low level APIs.
+Users can continue using their familiar Pytorch APIs while at the same time benefit from new hardware acceleration technologies.
+For kernel developers, the Triton language offers readability, user-friendliness and performance comparable to CUDA.
+This convenience allows developers to engage in the development of FlagGems with minimal learning investment.
+
+## Features
+
+FlagGems provides the following technical features.
+
+- A large collection of PyTorch compatible operators
+- Hand-optimized performance for selective operators
+- Eager-mode ready, independent of `torch.compile`
+- Automatic pointwise operator codegen supporting arbitrary input types and layout
+- Fast per-function runtime kernel dispatching
+- Multi-backend interface enabling support of diverse hardware platforms
+- Over 10 supported backends
+- C++ Triton function dispatcher (working in progress)
+
+Check the [features](https://flagos-ai.github.io/FlagGems/overview/features/) documentation for more details.
+
+## Getting Started
+
+- Refer to the [Getting Started](https://flagos-ai.github.io/FlagGems/getting-started/) for a quick start.
+- Refer to the [usage](https://flagos-ai.github.io/FlagGems/usage/) documentation for some details on using the software.
+
+## Sample models for testing
+
+- Bert-base-uncased
+- Llama-2-7b
+- Llava-1.5-7b
+
+## Contribution
+
+<!--TODO(Qiming): replicate this to other repo.-->
+
+- If you are interested in contributing to the FlagGems project, please refer to
+  [contribution guide](https://flagos-ai.github.io/FlagGems/contribution/overview/).
+  Any contributions would be highly appreciated.
+- Please file an issue for feature requests or bug reports.
+- Drop us an email at <a href="mailto:contact@flagos.io">contact@flagos.io</a> when you have questions or suggestions to share.
+- Join the FlagGems WeChat group by scanning the QR code below. You will receive first-hand messages about updates and new releases.
+  Let the team know your questions or ideas!
+
+  <img width="204" height="180" alt="开源小助手" src="https://github.com/user-attachments/assets/da42799f-c7f7-43f0-91c3-f4935b24e968" />
+
+## Citation
+
+If you find our work useful, please consider citing our project:
+
+```bibtex
+@misc{flaggems2024,
+    title={FlagOS/FlagGems: An operator library for large language models implemented in the Triton language.},
+    url={https://github.com/flagos-ai/FlagGems},
+    journal={GitHub},
+    author={The FlagOS contributors},
+    year={2024}
+}
 ```
 
-目前没有直接修改 FlagGems 源码，本库仅增加团队协作文档。当前候选优化在 vLLM 插件中接入，由插件按运行时适用条件启用；具体启用范围和验证状态见实验记录，不能将所有保留候选都视为默认启用。
+## License
 
-## 协作方式
-
-两平台共用本代码库，无需按平台拆分目录或分支。提交改动时写明适用平台、源码基点和必要验证结果；涉及通用路径的改动由另一平台负责人确认。每个平台的环境与实验结果分别保存在实验记录库，避免把实验报告复制进算子代码库。
-
-现有设备实测仅覆盖天数 BI-V150。沐曦－曦云 C500 由队友独立验证，BI-V150 的结果不能外推为 C500 表现或团队总分。性能探索当前已冻结，已有候选与负结果在实验记录库中保留。
-
-## 上游文档与许可证
-
-原有源码、文档及版权声明保持原样。许可证仍为 [Apache License 2.0](LICENSE)，完整内容见原许可证文件；本协作首页不替代或修改上游许可。
+The FlagGems project is licensed under the [Apache License (Version 2.0)](https://github.com/flagos-ai/FlagGems/blob/master/LICENSE).
