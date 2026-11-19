@@ -90,8 +90,8 @@ def qkv_rope_cache(a, packed, positions, cache, key_cache, value_cache, slots):
     value = value_storage[:, 2304:]
     with torch_device_fn.device(a.device):
         _projection_odd_partial[(40, 2)](
-            a, packed, partials, m, 2560, 2048, 64, 128, 2,
-            num_warps=8, num_stages=2,
+            a, packed, partials, m, 2560, 2048, 64, 64, 2,
+            num_warps=8, num_stages=4,
         )
         _reduce_rope_cache[(m + triton.cdiv(m * 128, 1024),)](
             partials, positions, cache, output, value, key_cache, value_cache,

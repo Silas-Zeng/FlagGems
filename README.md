@@ -1,5 +1,9 @@
 # FlagGems 团队协作
 
+沐曦 C500 当前迁移分支已在 `_metax/ops` 中实现 Triton packed GEMM、融合算子
+和分页 GQA Decode，移除了此前新增的 `.cu` 扩展及其编译加载器。
+下文团队协作基点与 BI-V150 验证范围为历史记录，不代表当前 C500 分支的代码状态。
+
 这是 FlagOS 第二季 MiniCPM5-2B 吞吐优化项目的团队共用算子代码库，供天数 BI-V150 与沐曦－曦云 C500 两个平台协作使用。
 
 - [上游中文说明](README_cn.md)：FlagGems 的功能、安装和使用方法。

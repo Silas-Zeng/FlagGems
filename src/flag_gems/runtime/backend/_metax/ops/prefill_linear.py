@@ -8,7 +8,6 @@ import triton
 import triton.language as tl
 
 _PREFILL_SMEM_OPT = os.environ.get("FLAGGEMS_METAX_PREFILL_SMEM_OPT", "1") == "1"
-_BSM_LINEAR_PREFILL = os.environ.get("FLAGGEMS_METAX_BSM_LINEAR_PREFILL", "1") == "1"
 
 
 @triton.jit(do_not_specialize=["M"])
@@ -111,19 +110,13 @@ def projection_linear_packed(a, weight, packed, *, odd_split=False):
     m, k = a.shape
     n = weight.shape[0]
     output = torch.empty((m, n), device=a.device, dtype=a.dtype)
-    if (_BSM_LINEAR_PREFILL and 1792 <= m <= 2048 and n == 2048
-            and a.is_contiguous()):
-        from .bsm_gate import packed_linear_into
-
-        if packed_linear_into(a, packed, output):
-            return output
     if odd_split and a.is_contiguous() and 33 <= m <= 64 and n == 2048:
         from .mm import mm_kernel_splitk_reduce
         partials = torch.empty((3, m, n), device=a.device, dtype=torch.float32)
         with torch_device_fn.device(a.device):
             _projection_odd_partial[(32, 3)](
                 a, packed, partials, m, n, k, 64, 64, 3,
-                num_warps=8, num_stages=2,
+                num_warps=8, num_stages=3,
             )
             mm_kernel_splitk_reduce[(triton.cdiv(m*n, 1024),)](
                 partials, output, m, n, n, 1, SPLIT_K=3,

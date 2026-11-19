@@ -63,7 +63,7 @@ def linear_residual_rms(a, weight, packed, residual, norm_weight, epsilon,
         else:
             _projection_odd_partial[(32, split_k)](
                 a, packed, partials, m, 2048, 2048, 64, 64, split_k,
-                num_warps=8, num_stages=2,
+                num_warps=8, num_stages=3,
             )
         _reduce_residual_rms[(m,)](
             partials, residual, norm_weight, output, residual_out, m,

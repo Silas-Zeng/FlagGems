@@ -16,8 +16,6 @@ from .mm import mm_kernel_splitk_reduce, mm_out
 PACK_N = 128
 PACK_K = 64
 _PREFILL_SMEM_OPT = os.environ.get("FLAGGEMS_METAX_PREFILL_SMEM_OPT", "1") == "1"
-_BSM_PREFILL = os.environ.get("FLAGGEMS_METAX_BSM_PREFILL", "1") == "1"
-_BSM_LINEAR_PREFILL = os.environ.get("FLAGGEMS_METAX_BSM_LINEAR_PREFILL", "1") == "1"
 
 
 @triton.jit
@@ -115,12 +113,6 @@ def packed_gate_up_silu(a, weight, packed, *, large_prefill=False):
     _check_operands(a, weight, packed, 12288, 2048)
     m = a.shape[0]
     output = torch.empty((m, 6144), dtype=a.dtype, device=a.device)
-    if (_BSM_PREFILL and large_prefill and 1792 <= m <= 2048
-            and a.is_contiguous()):
-        from .bsm_gate import packed_gate_into
-
-        if packed_gate_into(a, packed, output):
-            return output
     if 0 < m <= 64 and a.is_contiguous():
         bm, bn, warps = (32, 64, 8) if m <= 32 else (64, 64, 16)
         with torch_device_fn.device(a.device):
@@ -211,12 +203,6 @@ def packed_down(a, weight, packed, *, large_prefill=False, small_split=4):
         raise ValueError("unsupported Down split count")
     m = a.shape[0]
     output = torch.empty((m, 2048), dtype=a.dtype, device=a.device)
-    if (_BSM_LINEAR_PREFILL and large_prefill and 1024 <= m <= 2048
-            and a.is_contiguous()):
-        from .bsm_gate import packed_linear_into
-
-        if packed_linear_into(a, packed, output):
-            return output
     if 32 < m <= 64 and a.is_contiguous():
         partials = torch.empty((small_split, m, 2048), dtype=torch.float32, device=a.device)
         with torch_device_fn.device(a.device):
