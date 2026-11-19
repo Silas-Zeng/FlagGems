@@ -45,3 +45,126 @@ def test_small_m_nt_matches_torch_mm(M, K, N):
     mm.mm_out(a, weight.t(), out=output)
     reference = torch.mm(a, weight.t())
     torch.testing.assert_close(output, reference, rtol=0.03, atol=0.1)
+
+
+@pytest.mark.parametrize("M", [33, 48, 63, 64])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires GPU")
+def test_small_m_down_split_k_graph_replay(M):
+    mm = importlib.import_module("flag_gems.runtime.backend._metax.ops.mm")
+    a = torch.randn(M, 6144, device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn(2048, 6144, device="cuda", dtype=torch.bfloat16)
+    output = torch.empty(M, 2048, device="cuda", dtype=torch.bfloat16)
+    for _ in range(3):
+        mm.mm_out(a, weight.t(), out=output)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        mm.mm_out(a, weight.t(), out=output)
+    for _ in range(3):
+        a.normal_()
+        graph.replay()
+        torch.testing.assert_close(
+            output, torch.mm(a, weight.t()), rtol=0.03, atol=0.1
+        )
+    torch.testing.assert_close(
+        mm.mm(a, weight.t()), torch.mm(a, weight.t()), rtol=0.03, atol=0.1
+    )
+
+
+@pytest.mark.parametrize("layout", ["nn", "strided_a", "strided_out", "fp32"])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires GPU")
+def test_small_m_down_unsupported_layout_falls_back(layout):
+    mm = importlib.import_module("flag_gems.runtime.backend._metax.ops.mm")
+    dtype = torch.float32 if layout == "fp32" else torch.bfloat16
+    a = torch.randn(48, 6144, device="cuda", dtype=dtype)
+    b = torch.randn(2048, 6144, device="cuda", dtype=dtype).t()
+    output = torch.empty(48, 2048, device="cuda", dtype=dtype)
+    if layout == "nn":
+        b = b.contiguous()
+    elif layout == "strided_a":
+        a = torch.randn(48, 12288, device="cuda", dtype=dtype)[:, ::2]
+    elif layout == "strided_out":
+        output = torch.empty(48, 4096, device="cuda", dtype=dtype)[:, ::2]
+    reference = torch.mm(a, b)
+    mm.mm_out(a, b, out=output)
+    torch.testing.assert_close(output, reference, rtol=0.03, atol=0.1)
+
+
+@pytest.mark.parametrize(
+    ("M", "N", "K", "expected"),
+    [
+        (1024, 2560, 2048, (128, 256, 32, 8, 2, 16)),
+        (2048, 2560, 2048, (128, 256, 32, 8, 2, 16)),
+        (1536, 12288, 2048, (128, 128, 64, 8, 2, 16)),
+        (2048, 12288, 2048, (128, 128, 64, 8, 2, 16)),
+        (1536, 2048, 6144, (128, 128, 64, 8, 2, 16)),
+        (2048, 2048, 6144, (128, 128, 64, 8, 2, 16)),
+        (1536, 2048, 2048, (128, 64, 64, 8, 2, 16)),
+        (2048, 2048, 2048, (128, 64, 64, 8, 2, 16)),
+    ],
+)
+def test_prefill_nt_config(M, N, K, expected):
+    mm = importlib.import_module(
+        "flag_gems.runtime.backend._metax.ops.mm"
+    )
+    assert mm._prefill_nt_config(M, N, K) == expected
+
+
+def test_prefill_nt_config_rejects_unsupported_shapes():
+    mm = importlib.import_module(
+        "flag_gems.runtime.backend._metax.ops.mm"
+    )
+    assert mm._prefill_nt_config(1023, 2560, 2048) is None
+    assert mm._prefill_nt_config(2049, 2560, 2048) is None
+    assert mm._prefill_nt_config(2048, 4096, 2048) is None
+    assert mm._prefill_nt_config(2048, 2560, 4096) is None
+
+
+@pytest.mark.parametrize("M", [1024, 2048])
+@pytest.mark.parametrize(
+    "K,N", [(2048, 2560), (2048, 12288), (6144, 2048), (2048, 2048)]
+)
+@pytest.mark.parametrize("use_mm_out", [False, True])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires GPU")
+def test_prefill_nt_matches_torch_mm(M, K, N, use_mm_out):
+    mm = importlib.import_module(
+        "flag_gems.runtime.backend._metax.ops.mm"
+    )
+    a = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
+    b = weight.t()
+    reference = torch.mm(a, b)
+
+    if use_mm_out:
+        output = torch.empty(M, N, device="cuda", dtype=torch.bfloat16)
+        mm.mm_out(a, b, out=output)
+    else:
+        output = mm.mm(a, b)
+
+    torch.testing.assert_close(output, reference, rtol=0.03, atol=0.1)
+
+
+@pytest.mark.parametrize("M", [128, 192, 256, 511, 512, 768, 1023])
+@pytest.mark.parametrize("K,N", [(2048, 2560), (2048, 12288), (6144, 2048), (2048, 2048)])
+def test_medium_nt_matches_vendor(M, K, N):
+    mm = importlib.import_module("flag_gems.runtime.backend._metax.ops.mm")
+    a = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
+    w = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
+    torch.testing.assert_close(mm.mm(a, w.t()), torch.mm(a, w.t()), atol=0.1, rtol=0.03)
+
+
+@pytest.mark.parametrize("M", [192, 511, 768])
+def test_medium_nt_graph_updated_inputs_and_weights(M):
+    mm = importlib.import_module("flag_gems.runtime.backend._metax.ops.mm")
+    a = torch.randn(M, 2048, device="cuda", dtype=torch.bfloat16)
+    w = torch.randn(12288, 2048, device="cuda", dtype=torch.bfloat16)
+    out = torch.empty(M, 12288, device="cuda", dtype=torch.bfloat16)
+    for _ in range(3):
+        mm.mm_out(a, w.t(), out=out)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        mm.mm_out(a, w.t(), out=out)
+    for _ in range(2):
+        a.normal_()
+        w.normal_()
+        graph.replay()
+        torch.testing.assert_close(out, torch.mm(a, w.t()), atol=0.1, rtol=0.03)
