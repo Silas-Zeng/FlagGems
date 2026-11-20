@@ -274,6 +274,8 @@ flaggems-flagtune-compare = "flag_gems.flagtune.cli.compare:main"
 "flag_gems.runtime" = ["*/**/*.yaml"]
 "flag_gems.flagtune.contracts" = ["configs/*.yaml"]
 "flag_gems.utils" = ["configs/*.yaml"]
+"flaggems_benchmark" = ["core_shapes.yaml", "models_shapes/*.yaml"]
+"flaggems_benchmark.models_benchmark" = ["*.sh", "requirements.txt", "README.md"]
 
 [tool.setuptools_scm]
 write_to = "src/flag_gems/_version.py"
