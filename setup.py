@@ -17,7 +17,17 @@ file. The released wheel is built by ``.github/workflows/release.yaml`` after it
 patches the backend to ``setuptools.build_meta`` — that build honors this shim.
 """
 
-from setuptools import find_packages, setup
+from setuptools import find_namespace_packages, setup
+
+
+def discover_packages(directory, include=("*",)):
+    # The runtime and bundled suites both contain namespaces without __init__.py.
+    return find_namespace_packages(
+        directory,
+        include=include,
+        exclude=("__pycache__", "__pycache__.*", "*.__pycache__", "*.__pycache__.*"),
+    )
+
 
 setup(
     package_dir={
@@ -31,11 +41,14 @@ setup(
     # means it is found at src/flaggems_setup.py.
     py_modules=["flaggems_setup"],
     packages=(
-        find_packages("src")
-        + ["flaggems_tests", *(f"flaggems_tests.{p}" for p in find_packages("tests"))]
+        discover_packages("src", include=("flag_gems", "flag_gems.*"))
+        + [
+            "flaggems_tests",
+            *(f"flaggems_tests.{p}" for p in discover_packages("tests")),
+        ]
         + [
             "flaggems_benchmark",
-            *(f"flaggems_benchmark.{p}" for p in find_packages("benchmark")),
+            *(f"flaggems_benchmark.{p}" for p in discover_packages("benchmark")),
         ]
     ),
 )
