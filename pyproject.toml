@@ -273,10 +273,12 @@ flaggems-flagtune-compare = "flag_gems.flagtune.cli.compare:main"
 "flag_gems" = ["backends.yaml"]
 "flag_gems.runtime" = ["*/**/*.yaml"]
 "flag_gems.flagtune.contracts" = ["configs/*.yaml"]
+"flag_gems.utils" = ["configs/*.yaml"]
 
 [tool.setuptools_scm]
 write_to = "src/flag_gems/_version.py"
 version_scheme = "no-guess-dev"
+fallback_version = "5.3.5+archive"
 
 [tool.uv]
 
